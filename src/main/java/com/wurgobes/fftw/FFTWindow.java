@@ -48,6 +48,7 @@ import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 
 
+import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -56,6 +57,7 @@ import java.util.*;
 import javax.swing.*;
 import java.awt.event.ActionListener;
 import java.util.concurrent.atomic.DoubleAccumulator;
+import java.util.logging.Filter;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -68,15 +70,71 @@ public class FFTWindow implements Command {
     @Parameter
     private LogService logService;
 
+    @Parameter(label = "Window Type", choices = {"Hanning", "Blackman", "Custom"}, description = "Hanning")
+    private String windowType;
 
+    @Parameter(label = "Custom Window", required = false)
+    private ImagePlus customWindow;
+
+    ImagePlus imp, Result;
+    ImageProcessor FilterProcessor;
+
+    public static ImagePlus run(ImagePlus imp, String window) {
+        FFTWindow fftWindow = new FFTWindow();
+        fftWindow.imp = imp;
+        fftWindow.windowType = window;
+        fftWindow.run();
+        return fftWindow.Result;
+    }
+
+    public static ImagePlus run(ImagePlus imp, ImageProcessor filterProcessor) {
+        FFTWindow fftWindow = new FFTWindow();
+        fftWindow.imp = imp;
+        fftWindow.FilterProcessor = filterProcessor;
+        fftWindow.windowType = "Custom";
+        fftWindow.run();
+        return fftWindow.Result;
+    }
 
     @Override
     public void run() {
-        ImagePlus imp = WindowManager.getCurrentImage();
+        if(imp == null)
+            imp = IJ.getImage();
+
+
+        System.out.println("Image: " + imp.getTitle() + ", Window: " + windowType);
+
+        if(FilterProcessor == null) {
+            FilterProcessor = getWindow(windowType);
+        }
 
         ImagePlus FFTImp = FFT.forward(imp);
 
-        FFTImp.show();
+        System.out.println("FilterProcessor test");
+        Result = filter(imp, FilterProcessor);
+        System.out.println("Apply Filter test");
+        //FFTImp.show();
+        Result.show();
+
+    }
+
+    public static ImagePlus filter(ImagePlus imp, ImageProcessor filter) {
+        filter = filter.resize(imp.getWidth(), imp.getHeight());
+        final double max = filter.maxValue();
+
+        ImageProcessor imageProcessor = (ImageProcessor) imp.getProcessor().clone();
+
+        for (int i=0; i<imageProcessor.getPixelCount(); i++) {
+            if(i < 255)
+                System.out.println((int)(imageProcessor.get(i)*(filter.get(i)/max)) + " = " + imageProcessor.get(i) + "*(" + filter.get(i) + "/" + max + ")");
+            imageProcessor.set(i, (int) (imageProcessor.get(i)*(filter.get(i)/max)));
+        }
+
+        return new ImagePlus("filtered " + imp.getTitle(), imageProcessor);
+    }
+
+    public ImageProcessor getWindow(String windowType) {
+        return null;
     }
 
     //Only used when debugging from an IDE
@@ -84,10 +142,15 @@ public class FFTWindow implements Command {
         net.imagej.ImageJ ij = new net.imagej.ImageJ();
         ij.ui().showUI();
 
-        ImagePlus imp = IJ.openImage("H:\\PhD\\FFTWindow\\blobs.gif");
+        ImagePlus imp = IJ.openImage("H:\\PhD\\FFTWindow\\boats.tif");
         imp.show();
-        ij.command().run(FFTWindow.class, true);
 
+        ImagePlus filter =  IJ.openImage("H:\\PhD\\FFTWindow\\gradient.tif");
+
+
+        filter.show();
+        ImagePlus Result = FFTWindow.run(imp, filter.getProcessor());
+        Result.show();
 
     }
 }
