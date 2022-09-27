@@ -17,140 +17,188 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-import fiji.util.gui.GenericDialogPlus;
 
-import ij.*;
-import ij.gui.ImageWindow;
-import ij.gui.Roi;
-import ij.gui.StackWindow;
-import ij.io.Opener;
-import ij.plugin.*;
-
-import ij.process.*;
-import ij.io.FileSaver;
-import ij.WindowManager;
-import ij.gui.YesNoCancelDialog;
-
-
+import edu.mines.jtk.sgl.Axis;
+import ij.ImagePlus;
+import io.scif.formats.ImageIOFormat;
+import io.scif.services.DatasetIOService;
+import net.imagej.Dataset;
+import net.imagej.DatasetService;
+import net.imagej.axis.Axes;
+import net.imagej.axis.AxisType;
 import net.imagej.ops.OpService;
 
 
+import net.imagej.ops.image.equation.DefaultEquation;
+import net.imagej.ops.image.normalize.NormalizeIIFunction;
+import net.imglib2.*;
+
+
+import net.imglib2.img.ImagePlusAdapter;
 import net.imglib2.img.Img;
 import net.imglib2.img.display.imagej.ImageJFunctions;
-
+import net.imglib2.interpolation.InterpolatorFactory;
+import net.imglib2.interpolation.randomaccess.NLinearInterpolatorFactory;
+import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.RealType;
+
+import net.imglib2.type.numeric.real.DoubleType;
 import net.imglib2.type.numeric.real.FloatType;
-
-
+import net.imglib2.view.Views;
+import org.scijava.ItemIO;
+import org.scijava.ItemVisibility;
+import org.scijava.Priority;
+import org.scijava.app.StatusService;
 import org.scijava.command.Command;
+import org.scijava.display.DisplayService;
 import org.scijava.log.LogService;
 import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 
-
-import java.awt.*;
-import java.awt.event.ActionEvent;
 import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Paths;
-import java.util.*;
-import javax.swing.*;
-import java.awt.event.ActionListener;
-import java.util.concurrent.atomic.DoubleAccumulator;
-import java.util.logging.Filter;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import static java.lang.Math.*;
+import java.util.Random;
+import java.util.function.BiFunction;
+import java.util.function.DoubleBinaryOperator;
 
 
-@Plugin(type = Command.class)
-public class FFTWindow implements Command {
+@Plugin(type = Command.class, priority = Priority.HIGH, menuPath = "Plugins>FFTWindow>Apply Window")
+public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Command {
 
     @Parameter
-    private LogService logService;
+    private LogService log;
+
+    @Parameter
+    private OpService opService;
+
+    @Parameter
+    private DatasetService datasetService;
+
+    @Parameter(visibility = ItemVisibility.MESSAGE)
+    private final String header = "FFTWindow";
 
     @Parameter(label = "Window Type", choices = {"Hanning", "Blackman", "Custom"}, description = "Hanning")
     private String windowType;
 
-    @Parameter(label = "Custom Window", required = false)
-    private ImagePlus customWindow;
+    @Parameter(label = "Image to filter")
+    private Dataset dataset;
 
-    ImagePlus imp, Result;
-    ImageProcessor FilterProcessor;
+    @Parameter(label = "Custom Window")
+    private Dataset CustomFilter;
 
-    public static ImagePlus run(ImagePlus imp, String window) {
-        FFTWindow fftWindow = new FFTWindow();
-        fftWindow.imp = imp;
-        fftWindow.windowType = window;
-        fftWindow.run();
-        return fftWindow.Result;
+    @Parameter(type = ItemIO.OUTPUT)
+    private Dataset Result;
+
+
+    public Dataset run(Dataset dataset, String window) {
+        this.dataset = dataset;
+        this.CustomFilter = null;
+        this.windowType = window;
+
+        run();
+
+        return Result;
     }
 
-    public static ImagePlus run(ImagePlus imp, ImageProcessor filterProcessor) {
-        FFTWindow fftWindow = new FFTWindow();
-        fftWindow.imp = imp;
-        fftWindow.FilterProcessor = filterProcessor;
-        fftWindow.windowType = "Custom";
-        fftWindow.run();
-        return fftWindow.Result;
+    public Dataset run(Dataset dataset, Dataset filter) {
+        this.dataset = dataset;
+        this.CustomFilter = filter;
+        this.windowType = "Custom";
+
+        run();
+
+        return Result;
     }
 
     @Override
+
     public void run() {
-        if(imp == null)
-            imp = IJ.getImage();
+        long start_time = System.currentTimeMillis();
+        log.info("Running filter on " + dataset.getName() + " with " + windowType + " filter");
 
 
-        System.out.println("Image: " + imp.getTitle() + ", Window: " + windowType);
-
-        if(FilterProcessor == null) {
-            FilterProcessor = getWindow(windowType);
+        if(!windowType.equals("Custom")) {
+            try {
+                CustomFilter = getWindow(windowType);
+            } catch (IllegalAccessException e) {
+                throw new RuntimeException(e);
+            }
         }
 
-        ImagePlus FFTImp = FFT.forward(imp);
-
-        System.out.println("FilterProcessor test");
-        Result = filter(imp, FilterProcessor);
-        System.out.println("Apply Filter test");
-        //FFTImp.show();
-        Result.show();
-
+        Result = filter(dataset, CustomFilter);
+        log.info("Finished applying filter in " + (System.currentTimeMillis() - start_time) + "ms");
     }
 
-    public static ImagePlus filter(ImagePlus imp, ImageProcessor filter) {
-        filter = filter.resize(imp.getWidth(), imp.getHeight());
-        final double max = filter.maxValue();
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    private Dataset filter(final Dataset input, final Dataset filter) {
+        final Dataset result = input.copy();
+        result.setName("Filter of " + input.getName());
+        final Dataset resized_filter = filter.copy();
 
-        ImageProcessor imageProcessor = (ImageProcessor) imp.getProcessor().clone();
+        final InterpolatorFactory<T, RandomAccessible<T>> interpolator = new NLinearInterpolatorFactory<>();
+        final double[] scalars = new double[]{ (double) input.dimension(0)/filter.dimension(0), (double) input.dimension(1)/filter.dimension(1)};
+        final RandomAccessibleInterval<T> RAI_resized_filter = opService.transform().scaleView((Img<T>) resized_filter.getImgPlus(), scalars, interpolator);
 
-        for (int i=0; i<imageProcessor.getPixelCount(); i++) {
-            if(i < 255)
-                System.out.println((int)(imageProcessor.get(i)*(filter.get(i)/max)) + " = " + imageProcessor.get(i) + "*(" + filter.get(i) + "/" + max + ")");
-            imageProcessor.set(i, (int) (imageProcessor.get(i)*(filter.get(i)/max)));
+        final RandomAccess<? extends RealType> RA_input = input.getImgPlus().randomAccess();
+        final RandomAccess<? extends RealType> RA_filter = RAI_resized_filter.randomAccess();
+        final Cursor<? extends RealType> cursor = result.getImgPlus().localizingCursor();
+
+        final long[] pos1 = new long[input.numDimensions()];
+        final long[] pos2 = new long[resized_filter.numDimensions()];
+
+        final double max = Math.max(input.realMax(0), input.realMax(1));
+
+        while (cursor.hasNext()) {
+            cursor.fwd();
+            cursor.localize(pos1);
+            cursor.localize(pos2);
+            RA_input.setPosition(pos1);
+            RA_filter.setPosition(pos2);
+            final double sum = RA_input.get().getRealDouble() * (RA_filter.get().getRealDouble() / max);
+            cursor.get().setReal(sum);
         }
 
-        return new ImagePlus("filtered " + imp.getTitle(), imageProcessor);
+        return result;
     }
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public Dataset getWindow(String windowType) throws IllegalAccessException {
+        Dataset filterDataset = datasetService.create(new FloatType(), new long[]{64, 16}, "Filter", new AxisType[]{Axes.X, Axes.Y});
+        final IterableInterval<? extends RealType> II_filter = Views.iterable(filterDataset);
 
-    public ImageProcessor getWindow(String windowType) {
-        return null;
+
+        log.info("Image Created");
+        DoubleBinaryOperator equation;
+
+        switch(windowType) {
+            case "Blackman":
+                equation = (x, y) -> x + y*2;
+                break;
+            case "Hanning":
+                equation = (x, y)  -> x * y;
+                break;
+            default:
+                throw new IllegalAccessException("Invalid window type " + windowType);
+        }
+
+        opService.image().equation(II_filter, equation);
+        log.info("Equation Applied");
+
+        log.info("Done!");
+        return filterDataset;
+
     }
 
     //Only used when debugging from an IDE
-    public static void main(String[] args) {
+    public static void main(String[] args)  throws IOException  {
         net.imagej.ImageJ ij = new net.imagej.ImageJ();
         ij.ui().showUI();
 
-        ImagePlus imp = IJ.openImage("H:\\PhD\\FFTWindow\\boats.tif");
-        imp.show();
+        Dataset input = (Dataset) ij.io().open("H:\\PhD\\FFTWindow\\boats.tif");
+        Dataset filter = (Dataset) ij.io().open("H:\\PhD\\FFTWindow\\gradient.tif");
 
-        ImagePlus filter =  IJ.openImage("H:\\PhD\\FFTWindow\\gradient.tif");
+        ij.ui().show(input);
+        ij.ui().show(filter);
 
-
-        filter.show();
-        ImagePlus Result = FFTWindow.run(imp, filter.getProcessor());
-        Result.show();
+        ij.command().run(FFTWindow.class, true);
 
     }
 }

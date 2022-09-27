@@ -8,7 +8,7 @@ import org.scijava.log.LogService;
 import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 
-@Plugin(type = Command.class, menuPath = "Plugins>Faster Temporal Median>About Faster Temporal Median...")
+@Plugin(type = Command.class, menuPath = "Plugins>FFTWindow>About FFTWindow...")
 public class About implements Command {
 
     @Parameter
