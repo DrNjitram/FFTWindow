@@ -14,11 +14,11 @@
 
 	<groupId>com.wurgobes</groupId>
 	<artifactId>FFTWindow</artifactId>
-	<version>0.1</version>
+	<version>1.0</version>
 
 
 	<name>FFTWindow</name>
-	<description>Creating various window filters for 2D FFT</description>
+	<description>Creating various window filters for 2+D FFT</description>
 	<url>https://github.com/HohlbeinLab/FTM2</url>
 	<inceptionYear>2022</inceptionYear>
 	<organization>

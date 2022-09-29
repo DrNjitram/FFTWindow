@@ -19,6 +19,7 @@ SOFTWARE.
 
 
 
+import ij.IJ;
 import io.scif.services.DatasetIOService;
 import net.imagej.Dataset;
 import net.imagej.DatasetService;
@@ -30,6 +31,7 @@ import net.imagej.ops.OpService;
 import net.imglib2.*;
 import net.imglib2.algorithm.stats.ComputeMinMax;
 import net.imglib2.img.Img;
+import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.interpolation.InterpolatorFactory;
 import net.imglib2.interpolation.randomaccess.NLinearInterpolatorFactory;
 import net.imglib2.type.NativeType;
@@ -64,15 +66,17 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
     @Parameter
     private DatasetService datasetService;
 
+    @Parameter
+    private UIService uiService;
+
     @Parameter(visibility = ItemVisibility.MESSAGE, label = "FFTWindow")
     private final String header = "Settings";
 
-    @Parameter(label = "Window Type", choices = {"Bartlett", "Hanning", "Blackman", "Tukey", "Cosine-Sum", "Custom"}, callback = "setOptions")
+    @Parameter(label = "Window Type", choices = {"Bartlett", "Hanning", "Blackman", "Tukey", "Custom"}, callback = "setOptions")
     private String windowType = "Hanning";
 
     @Parameter(label = "Image to filter", persist = false)
     private Dataset dataset;
-
 
     @Parameter(label = "Custom Window", persist = false)
     private Dataset CustomFilter;
@@ -82,7 +86,6 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
 
     @Parameter(type = ItemIO.OUTPUT)
     private Dataset Result;
-
 
     public Dataset run(Dataset dataset, String window) {
         this.dataset = dataset;
@@ -138,6 +141,7 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
     private Dataset filter(final Dataset input, final Dataset filter) {
+        IJ.showStatus("Applying " + windowType + " window");
         final Dataset result = input.copy();
         result.setName("Filter of " + input.getName());
         final Dataset resized_filter = filter.copy();
