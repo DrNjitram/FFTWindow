@@ -1,6 +1,6 @@
 <html># FFTWindow<br>
 This plugin was made to easily apply various window functions to images and stacks (including hyperstacks).<br>
-It can be used to apply a small selection of windows (currently Bartlett, Hanning, Blackman), or a custom filte image, to a multidimensional image.<br>
+It can be used to apply a small selection of windows (currently Bartlett, Hanning, Blackman), or a custom filter image, to a multidimensional image.<br>
 <br>
 When using using the plugin via Java, it is also possible to provide a lambda function which is used to create a filter image.<br>
 <br>
