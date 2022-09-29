@@ -174,7 +174,6 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
         final double[] dims_c = new double[]{dims[0]/2f, dims[1]/2f}; //center of the filter
         final double r_max = Math.min(dims_c[0], dims_c[1]); //maximum distance in pixels to the center
         final double a_final = alpha; // final value for performance
-        final Double[] CosSumAlphas = Arrays.stream(CosSumParameters.split(",")).map(Double::parseDouble).toArray(Double[]::new);
         switch(windowType) {
             case "Bartlett":
                 equation = (x, y) -> Bartlett(x, y, dims_c[0], dims_c[1], r_max);
