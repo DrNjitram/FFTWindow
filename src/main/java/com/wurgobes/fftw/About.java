@@ -41,7 +41,7 @@ public class About implements Command {
     public void run() {
         log.info("FFT Window About");
         String content = "Developed by Martijn Gobes at the Holhbein Lab.\nMore information can be found at https://github.com/DrNjitram/FFTWindow/\n" +
-                "Current Version: 1.0";
+                "Current Version: 1.1";
 
         GenericDialog gd = new GenericDialog("About");
         gd.addMessage(content);
