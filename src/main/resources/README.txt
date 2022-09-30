@@ -6,4 +6,4 @@ When using using the plugin via Java, it is also possible to provide a lambda fu
 <br>
 ## Usage<br>
 Open any image (and a custom filter if desired) and open the plugin (Plugins>FFTWindow>Run) and select a window.<br>
-If Tukey is chosen, the alpha value can be changed to adjust the width of the filter, with 1 being a top-hat function and 0 being equal to the Hanning filter.<br>
+If Modified-Tukey is chosen, the alpha-value and n-value can be changed to adjust the width of the filter, with alpha 1 being a top-hat function and 0 being equal to the Hanning filter. The n values dictates the edges of the value, effectively noting the fraction where the entire image will be black. <br>

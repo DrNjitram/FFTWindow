@@ -17,16 +17,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
  */
 
-
-
 import ij.IJ;
-import io.scif.services.DatasetIOService;
 import net.imagej.Dataset;
 import net.imagej.DatasetService;
 import net.imagej.axis.Axes;
 import net.imagej.axis.AxisType;
 import net.imagej.ops.OpService;
-
 
 import net.imglib2.*;
 import net.imglib2.algorithm.stats.ComputeMinMax;
@@ -34,9 +30,9 @@ import net.imglib2.img.Img;
 import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.interpolation.InterpolatorFactory;
 import net.imglib2.interpolation.randomaccess.NLinearInterpolatorFactory;
+import net.imglib2.loops.LoopBuilder;
 import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.RealType;
-
 
 import net.imglib2.type.numeric.real.FloatType;
 import net.imglib2.view.Views;
@@ -50,7 +46,6 @@ import org.scijava.plugin.Plugin;
 import org.scijava.ui.UIService;
 
 import java.io.*;
-import java.util.Arrays;
 import java.util.function.DoubleBinaryOperator;
 
 
@@ -69,10 +64,12 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
     @Parameter
     private UIService uiService;
 
+
+
     @Parameter(visibility = ItemVisibility.MESSAGE, label = "FFTWindow")
     private final String header = "Settings";
 
-    @Parameter(label = "Window Type", choices = {"Bartlett", "Hanning", "Blackman", "Tukey", "Custom"}, callback = "setOptions")
+    @Parameter(label = "Window Type", choices = {"Bartlett", "Hanning", "Blackman", "Modified Tukey", "Custom"}, callback = "setOptions")
     private String windowType = "Hanning";
 
     @Parameter(label = "Image to filter", persist = false)
@@ -81,8 +78,11 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
     @Parameter(label = "Custom Window", persist = false)
     private Dataset CustomFilter;
 
-    @Parameter(label = "alpha value", min = "0", max = "1", stepSize = "0.1", description = "Only used for Tukey")
+    @Parameter(label = "alpha value", min = "0", max = "1", stepSize = "0.1", callback = "validate_a", description = "Only used for Modified Tukey. Denotes the end of 1 values in fractional distance to the edge of the shortest axis.")
     private double alpha = 0.5;
+
+    @Parameter(label = "n value", min = "0", max = "1", stepSize = "0.1", callback = "validate_n", description = "Only used for Modified Tukey. Denotes the start of 0 values in fractional distance to the edge of the shortest axis")
+    private double n = 1;
 
     @Parameter(type = ItemIO.OUTPUT)
     private Dataset Result;
@@ -107,6 +107,18 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
         return Result;
     }
 
+    public Dataset run(Dataset dataset, String window, double alpha, double n){
+        this.dataset = dataset;
+        this.CustomFilter = null;
+        this.windowType = window;
+        this.alpha = alpha;
+        this.n = n;
+
+        run();
+
+        return Result;
+    }
+
     public Dataset run(Dataset dataset, DoubleBinaryOperator equation) {
         return this.run(dataset, equation, new long[]{512, 512});
     }
@@ -121,7 +133,18 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
         return Result;
     }
 
+
+
+    public void validate_a(){
+        if(alpha > n) n = alpha;
+    }
+
+    public void validate_n(){
+        if(alpha > n) alpha = n;
+    }
+
     @Override
+    @SuppressWarnings("unchecked")
     public void run() {
         long start_time = System.currentTimeMillis();
         log.info("Running filter on " + dataset.getName() + " with " + windowType + " filter");
@@ -129,18 +152,25 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
         if(!windowType.equals("Custom")) {
             try {
                 CustomFilter = getWindow(windowType);
+                //ImageJFunctions.show((RandomAccessibleInterval<T>) CustomFilter.getImgPlus());
             } catch (IllegalAccessException e) {
                 e.printStackTrace();
                 return;
             }
         }
 
-        Result = filter(dataset, CustomFilter);
+        if(dataset.numDimensions() > 2) {
+            Result = slowfilter(dataset, CustomFilter);
+        } else {
+            Result = parallelFilter(dataset, CustomFilter);
+        }
+
+
         log.info("Finished applying filter in " + (System.currentTimeMillis() - start_time) + "ms");
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    private Dataset filter(final Dataset input, final Dataset filter) {
+    private Dataset slowfilter(final Dataset input, final Dataset filter) {
         IJ.showStatus("Applying " + windowType + " window");
         final Dataset result = input.copy();
         result.setName("Filter of " + input.getName());
@@ -172,12 +202,37 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
         return result;
     }
 
+    @SuppressWarnings("unchecked")
+    private Dataset parallelFilter(Dataset input, Dataset filter) {
+        final Dataset result = input.copy();
+        final Dataset resized_filter = filter.copy();
+        final InterpolatorFactory<T, RandomAccessible<T>> interpolator = new NLinearInterpolatorFactory<>();
+        final double[] scalars = new double[]{ (double) input.dimension(0)/filter.dimension(0), (double) input.dimension(1)/filter.dimension(1)};
+        final RandomAccessibleInterval<T> RAI_resized_filter = opService.transform().scaleView((Img<T>) resized_filter.getImgPlus(), scalars, interpolator);
+        final double[] minmax = getMinMax(filter);
+        //final ExtendedRandomAccessibleInterval<T, RandomAccessibleInterval<T>> test = Views.extendPeriic(RAI_resized_filter);
+
+        LoopBuilder.setImages(input, RAI_resized_filter, result).multiThreaded().forEachPixel(
+                (i, f, r) -> r.setReal(i.getRealDouble() * ((f.getRealDouble()-minmax[0]) / minmax[1]))
+        );
+
+        /* Works for multi D, but is a lot slower than normal versions
+        LoopBuilder.setImages(Intervals.positions(input), input, result).multiThreaded().forEachPixel(
+                (p, i, r) -> r.setReal(i.getRealDouble() * ((RAI_resized_filter.getAt(new int[]{p.getIntPosition(0), p.getIntPosition(1)}).getRealDouble()-minmax[0]) / minmax[1]))
+        );
+
+         */
+
+        return result;
+    }
+
     public Dataset getWindow(String windowType) throws IllegalAccessException {
         final DoubleBinaryOperator equation;
         final long[] dims = new long[]{512, 512}; //filter dimensions
         final double[] dims_c = new double[]{dims[0]/2f, dims[1]/2f}; //center of the filter
         final double r_max = Math.min(dims_c[0], dims_c[1]); //maximum distance in pixels to the center
         final double a_final = alpha; // final value for performance
+        final double n_final = n;
         switch(windowType) {
             case "Bartlett":
                 equation = (x, y) -> Bartlett(x, y, dims_c[0], dims_c[1], r_max);
@@ -188,8 +243,8 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
             case "Hanning":
                 equation = (x, y) -> Hanning(x, y, dims_c[0], dims_c[1], r_max);
                 break;
-            case "Tukey":
-                equation = (x, y) -> Tukey(x, y, dims_c[0], dims_c[1], r_max, a_final);
+            case "Modified Tukey":
+                equation = (x, y) -> Tukey(x, y, dims_c[0], dims_c[1], r_max, a_final, n_final);
                 break;
             default:
                 throw new IllegalAccessException("Invalid window type " + windowType);
@@ -221,10 +276,10 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
         return r > r_max ? 0f : 0.42 - 0.5 * Math.cos(Math.PI * (1 - r/r_max)) + 0.08 * Math.cos(2* Math.PI * (1 - r/r_max));
     }
 
-    private static double Tukey(final double x, final double y, final double x_c, final double y_c, final double r_max, final double alpha) {
+    private static double Tukey(final double x, final double y, final double x_c, final double y_c, final double r_max, final double alpha, final double n) {
         double r = Math.sqrt(Math.pow(x - x_c, 2) + Math.pow(y - y_c, 2))/r_max; //fraction of distance to the center (0 = center, 1 = edge)
         if (r < alpha) return 1;
-        else if (r < 1) return 0.5 * (1 - Math.cos((Math.PI * (r-1))/(1-alpha)));
+        else if (r < n) return 0.5 * (1 - Math.cos((Math.PI * (r-n))/(n-alpha)));
         else return 0f;
     }
 
@@ -243,9 +298,9 @@ public class FFTWindow  <T extends RealType<T> & NativeType<T>> implements Comma
         net.imagej.ImageJ ij = new net.imagej.ImageJ();
         ij.ui().showUI();
 
-        Dataset input = (Dataset) ij.io().open("C:\\Users\\gobes001\\LocalSoftware\\FFTWindow\\test.tif");
+        Dataset input = (Dataset) ij.io().open("testing.tif");
         //Dataset input = (Dataset) ij.io().open("test_stack.tif");
-        //Dataset filter = (Dataset) ij.io().open("C:\\Users\\gobes001\\LocalSoftware\\FFTWindow\\gradient.tif");
+        //Dataset filter = (Dataset) ij.io().open("gradient.tif");
 
         ij.ui().show(input);
         //ij.ui().show(filter);
